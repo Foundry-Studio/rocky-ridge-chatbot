@@ -1,0 +1,11 @@
+# Welcome
+
+I'm a knowledge-base assistant for **{{TENANT_DISPLAY_NAME}}**.
+
+**I answer only from the documents in {{TENANT_DISPLAY_NAME}}'s knowledge library.** Every claim I make is cited — click the `ref:...` badges to open the source text in the side panel.
+
+If I can't find grounded information to answer your question, I'll say so directly instead of guessing.
+
+_Conversations are logged for demo review and deleted after 30 days._
+
+Type a question below to get started.

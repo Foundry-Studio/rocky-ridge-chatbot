@@ -1,0 +1,19 @@
+[project]
+enable_telemetry = false
+session_timeout = 3600
+user_env = []
+allow_origins = ["*"]
+
+[features]
+unsafe_allow_html = false
+latex = false
+edit_message = false
+
+[UI]
+name = "{{TENANT_DISPLAY_NAME}}"
+description = "Ask questions about {{TENANT_DISPLAY_NAME}}'s knowledge base. Every answer is grounded in source documents; conversations are logged for demo review and deleted after 30 days."
+default_collapse_content = false
+default_theme = "light"
+
+[meta]
+generated_by = "venture-knowledge-chatbot v0"

@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# venvs
+.venv/
+venv/
+env/
+ENV/
+
+# testing
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# secrets / local env
+.env
+.env.local
+*.token
+
+# Chainlit runtime
+.chainlit/translations/
+.files/
+chainlit.md
+
+# Conversation logs (for local runs only — Railway volume handles prod)
+conversations.jsonl
+conversations-*.jsonl
+daily_spend.json
+/data/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# stray test artifacts
+test-conversations.jsonl
+test-daily-spend.json

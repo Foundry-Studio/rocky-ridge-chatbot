@@ -1,0 +1,64 @@
+[project]
+name = "rocky-ridge-chatbot"
+version = "0.1.0"
+description = "Grounded RAG chatbot for Rocky Ridge Land Management — VKC v0 sibling Railway service to Foundry-Agent-System."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Foundry Studio" }]
+
+# Exact pin on chainlit (CVE history — see plan §4)
+# Caret pins on transitive direct deps where minor upgrades are safe
+dependencies = [
+    "chainlit==2.11.1",
+    "httpx>=0.27,<0.28",
+    "httpx-sse>=0.4,<0.5",
+    "aiofiles>=23.2,<24.0",
+    "pydantic>=2.7,<3.0",
+    "pydantic-settings>=2.2,<3.0",
+    "structlog>=24.1,<25.0",
+    "tenacity>=8.2,<9.0",
+    "PyYAML>=6.0,<7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.1,<9.0",
+    "pytest-asyncio>=0.23,<0.24",
+    "pytest-mock>=3.12,<4.0",
+    "respx>=0.21,<0.22",
+    "ruff>=0.4,<0.5",
+    "mypy>=1.9,<2.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = [
+    "ignore::DeprecationWarning:starlette.*",
+    "ignore::DeprecationWarning:httpx.*",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4"]
+ignore = ["E501"]  # line-length handled by formatter
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
