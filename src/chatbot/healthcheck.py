@@ -70,7 +70,19 @@ async def healthz_handler() -> Response:
 
 
 def register_healthz(cl_app) -> None:  # noqa: ANN001 — FastAPI app
-    """Mount /healthz on Chainlit's underlying FastAPI app."""
+    """Mount /healthz on Chainlit's underlying FastAPI app.
+
+    Chainlit's server module registers a catch-all ``/{full_path:path}`` route
+    during its own import (for serving the SPA). Any route we ``add_api_route``
+    from our app module lands AFTER that catch-all in the route list, which
+    means FastAPI's sequential matching serves the SPA HTML for /healthz
+    instead of our JSON handler. To fix: add the route, then move it to the
+    front of the route list so it matches before the catch-all.
+    """
     cl_app.add_api_route(
         "/healthz", healthz_handler, methods=["GET"], include_in_schema=False
     )
+    # The just-added route is last in the list; move it to the front.
+    if cl_app.routes:
+        new_route = cl_app.routes.pop()
+        cl_app.routes.insert(0, new_route)

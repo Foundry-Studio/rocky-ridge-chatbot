@@ -10,11 +10,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && pip install --upgrade pip
 
 WORKDIR /app
-COPY pyproject.toml ./
-COPY README.md ./
-RUN pip install -e . --no-cache-dir
-
+# pyproject.toml uses package-dir = src, so setuptools requires src/ at install
+# time. Copy everything first, then install — layer-caching optimization isn't
+# available for editable installs over a src/ layout.
 COPY . .
+RUN pip install --no-cache-dir .
 
 RUN chmod +x scripts/entrypoint.sh
 
