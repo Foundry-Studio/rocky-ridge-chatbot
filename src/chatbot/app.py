@@ -12,7 +12,6 @@ import uuid
 
 import chainlit as cl
 
-from chatbot import conversation_log as conv_log_mod
 from chatbot import foundry_client, healthcheck, injection_filter, session
 from chatbot.citation_parser import (
     UNMATCHED_WARNING,
@@ -26,7 +25,7 @@ from chatbot.exceptions import (
     FoundryMalformedResponseError,
     FoundryTransientError,
 )
-from chatbot.foundry_client import ChatMessage, KnowledgeChunk
+from chatbot.foundry_client import KnowledgeChunk
 from chatbot.prompt_builder import build_answer_messages
 from chatbot.query_reformulator import (
     needs_reformulation,

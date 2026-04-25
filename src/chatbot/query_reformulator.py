@@ -76,7 +76,7 @@ async def reformulate(
             reformulation_coro, timeout=s.reformulation_timeout_s
         )
         candidate = "".join(tokens).strip().strip('"').strip("'")
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("reformulation timeout — falling back to raw query")
         return query
     except Exception as e:

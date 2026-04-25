@@ -16,12 +16,12 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
 from httpx_sse import EventSource
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from chatbot.config import Settings, get_settings
 from chatbot.exceptions import (

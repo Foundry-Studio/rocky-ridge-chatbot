@@ -5,7 +5,6 @@ from __future__ import annotations
 import httpx
 import pytest
 import respx
-
 from chatbot import foundry_client
 from chatbot.exceptions import (
     FoundryAuthError,

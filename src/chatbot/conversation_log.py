@@ -12,7 +12,7 @@ import logging
 import os
 import time
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import aiofiles
@@ -72,7 +72,7 @@ class ConversationLog:
             size_mb = self._path.stat().st_size / (1024 * 1024)
             if size_mb < self._s.chatbot_log_rotate_mb:
                 return
-            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
             # Name pattern: conversations-YYYYMMDDTHHMMSSZ.jsonl — keeps the
             # archive glob ('conversations-*.jsonl') disjoint from the live file.
             stem = self._path.stem  # 'conversations'
@@ -101,4 +101,4 @@ class ConversationLog:
 
 
 def utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()

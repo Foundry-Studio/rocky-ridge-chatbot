@@ -6,32 +6,31 @@ import json
 from pathlib import Path
 
 import pytest
-
 from chatbot.conversation_log import ConversationLog, LogEntry, utcnow_iso
 
 
 def _mk_entry(**overrides) -> LogEntry:
-    base = dict(
-        ts=utcnow_iso(),
-        session_id="s1",
-        turn_n=1,
-        request_id="r1",
-        user_msg="hi",
-        reformulated_query="hi",
-        reformulation_skipped=True,
-        refused=False,
-        refusal_reason=None,
-        top_chunk_scores_raw=[0.015],
-        top_chunk_scores_normalized=[0.46],
-        cited_chunk_ids=["c_abc"],
-        unmatched_ref_ids=[],
-        post_llm_refusal=False,
-        answer="Some answer [ref:c_abc].",
-        latency_ms_total=1234,
-        latency_ms_retrieval=234,
-        error=None,
-        finish_reason="stop",
-    )
+    base = {
+        "ts": utcnow_iso(),
+        "session_id": "s1",
+        "turn_n": 1,
+        "request_id": "r1",
+        "user_msg": "hi",
+        "reformulated_query": "hi",
+        "reformulation_skipped": True,
+        "refused": False,
+        "refusal_reason": None,
+        "top_chunk_scores_raw": [0.015],
+        "top_chunk_scores_normalized": [0.46],
+        "cited_chunk_ids": ["c_abc"],
+        "unmatched_ref_ids": [],
+        "post_llm_refusal": False,
+        "answer": "Some answer [ref:c_abc].",
+        "latency_ms_total": 1234,
+        "latency_ms_retrieval": 234,
+        "error": None,
+        "finish_reason": "stop",
+    }
     base.update(overrides)
     return LogEntry(**base)
 

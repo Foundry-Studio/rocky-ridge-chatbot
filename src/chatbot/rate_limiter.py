@@ -83,8 +83,8 @@ class RateLimiter:
                 data = json.loads(raw)
                 if (
                     isinstance(data, dict)
-                    and isinstance(data.get("spent"), (int, float))
-                    and isinstance(data.get("reset_ts"), (int, float))
+                    and isinstance(data.get("spent"), int | float)
+                    and isinstance(data.get("reset_ts"), int | float)
                 ):
                     # Only honor the persisted value if we're still before
                     # the reset timestamp. Otherwise start fresh.
@@ -119,7 +119,7 @@ class RateLimiter:
     def _next_midnight_utc() -> float:
         import datetime as _dt
 
-        today_utc = _dt.datetime.now(_dt.timezone.utc).replace(
+        today_utc = _dt.datetime.now(_dt.UTC).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
         tomorrow = today_utc + _dt.timedelta(days=1)

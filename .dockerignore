@@ -16,10 +16,6 @@ venv/
 .github/
 tests/
 eval/
-docs/
-README.md
-*.md
-!chainlit.md.template
 .vscode/
 .idea/
 conversations.jsonl

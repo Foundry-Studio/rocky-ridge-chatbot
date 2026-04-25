@@ -5,7 +5,6 @@ from __future__ import annotations
 import httpx
 import pytest
 import respx
-
 from chatbot import foundry_client
 from chatbot.foundry_client import ChatMessage
 from chatbot.query_reformulator import (
@@ -13,7 +12,6 @@ from chatbot.query_reformulator import (
     needs_reformulation,
     reformulate,
 )
-
 
 # ── needs_reformulation heuristic ───────────────────────────────
 

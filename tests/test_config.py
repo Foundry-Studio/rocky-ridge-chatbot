@@ -18,8 +18,9 @@ def test_missing_required_raises(monkeypatch):
     # Clear the cached import and drop a required env var
     monkeypatch.delenv("FOUNDRY_INTERNAL_TOKEN", raising=False)
     from chatbot.config import Settings
+    from pydantic import ValidationError
 
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         Settings(foundry_internal_token="")  # type: ignore[call-arg]
 
 
@@ -38,8 +39,9 @@ def test_tenant_display_name_injection_rejected(monkeypatch):
 
 def test_refusal_threshold_clamped(monkeypatch):
     from chatbot.config import Settings
+    from pydantic import ValidationError
 
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         Settings(
             foundry_api_base_url="https://x.invalid",
             foundry_internal_token="tok",

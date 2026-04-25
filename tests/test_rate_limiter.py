@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from chatbot.rate_limiter import RateLimiter
 
 

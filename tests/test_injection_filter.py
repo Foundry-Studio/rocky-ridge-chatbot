@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from chatbot.injection_filter import is_injection, leaks_system_prompt
 
 
