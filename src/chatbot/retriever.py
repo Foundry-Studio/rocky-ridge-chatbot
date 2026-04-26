@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from chatbot import foundry_client
 from chatbot.config import Settings, get_settings
@@ -43,15 +43,6 @@ class RetrievalResult:
     total_returned: int
     latency_ms: int
     is_sufficient: bool  # max_score_normalized >= refusal_threshold
-    short_id_map: dict[str, str] = field(default_factory=dict)
-    # short_id (e.g. "c_3f2a18b7") → full chunk_id UUID
-
-
-def _short_id(chunk_id: str) -> str:
-    """Derive a short, Sonnet-friendly citation ID from the full UUID.
-    First 8 hex chars of the stripped UUID, prefixed c_."""
-    hex_only = chunk_id.replace("-", "")
-    return f"c_{hex_only[:8]}"
 
 
 async def retrieve(
@@ -73,14 +64,6 @@ async def retrieve(
     max_raw = max(raw_scores, default=0.0)
     max_norm = normalize_rrf_score(max_raw)
 
-    short_map: dict[str, str] = {}
-    for c in chunks:
-        sid = _short_id(c.chunk_id)
-        # Collision guard — vanishingly rare but defend anyway.
-        if sid in short_map and short_map[sid] != c.chunk_id:
-            sid = f"c_{c.chunk_id.replace('-', '')[:12]}"
-        short_map[sid] = c.chunk_id
-
     is_sufficient = max_norm >= s.chatbot_refusal_threshold
     logger.info(
         "retrieve: returned=%d max_raw=%.4f max_norm=%.2f "
@@ -99,5 +82,4 @@ async def retrieve(
         total_returned=resp.total,
         latency_ms=latency_ms,
         is_sufficient=is_sufficient,
-        short_id_map=short_map,
     )

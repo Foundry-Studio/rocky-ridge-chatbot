@@ -15,6 +15,7 @@ import chainlit as cl
 from chatbot import foundry_client, healthcheck, injection_filter, session
 from chatbot.citation_parser import (
     UNMATCHED_WARNING,
+    render_sources_section,
     strip_unmatched,
 )
 from chatbot.config import get_settings
@@ -25,7 +26,6 @@ from chatbot.exceptions import (
     FoundryMalformedResponseError,
     FoundryTransientError,
 )
-from chatbot.foundry_client import KnowledgeChunk
 from chatbot.prompt_builder import build_answer_messages
 from chatbot.query_reformulator import (
     needs_reformulation,
@@ -227,7 +227,6 @@ async def _handle_message(
         chunks=result.chunks,
         history=history,
         tenant_display_name=settings.chatbot_tenant_display_name,
-        short_id_map=result.short_id_map,
         max_history_turns=settings.chatbot_max_history_turns,
     )
 
@@ -277,31 +276,32 @@ async def _handle_message(
             raw_answer += footer
             await out.stream_token(footer)
 
-    # ── Citation pass (strip fakes + build side-panel elements) ─
-    cleaned_text, matched_ids, unmatched_ids = strip_unmatched(
-        raw_answer, result.short_id_map
+    # ── Citation pass (strip fakes + render Sources section) ────
+    cleaned_text, matched_indices, unmatched_indices = strip_unmatched(
+        raw_answer, max_index=len(result.chunks)
     )
 
     # Post-LLM checks
     post_llm_refused = contains_model_refusal(cleaned_text)
     if injection_filter.leaks_system_prompt(cleaned_text):
-        logger.error(
-            "system prompt leak detected in answer — redacting",
-        )
+        logger.error("system prompt leak detected in answer — redacting")
         cleaned_text = (
             "*[Answer redacted: model echoed protected content. "
             "Please rephrase your question.]*"
         )
-        matched_ids = []
+        matched_indices = []
 
-    # Prepend warning banner if fake citations were dropped
-    final_visible_text = cleaned_text
-    if unmatched_ids:
-        final_visible_text = UNMATCHED_WARNING + cleaned_text
+    # Prepend warning banner if fake citations were dropped, then append
+    # the Markdown Sources section listing only the chunks the model cited.
+    warning = UNMATCHED_WARNING if unmatched_indices else ""
+    sources_md = render_sources_section(result.chunks, matched_indices)
+    final_visible_text = warning + cleaned_text + sources_md
 
-    # Update message: swap content to cleaned version + attach elements
+    # Replace bubble content. NO Chainlit elements — pure Markdown to
+    # sidestep the multi-turn display="side" bug cluster (see plan UX
+    # investigation: GH issues #1242, #1827, #2202, #2263).
     out.content = final_visible_text
-    out.elements = _build_side_elements(matched_ids, result.chunks, result.short_id_map)
+    out.elements = []
     await out.update()
 
     # ── Record spend, history, log ──────────────────────────────
@@ -309,6 +309,14 @@ async def _handle_message(
     output_chars = len(cleaned_text)
     cost = estimate_cost_usd(input_chars, output_chars)
     await rate_limiter.record_spend(cost)
+
+    # Resolve cited indices → full chunk_ids for the audit log.
+    cited_chunk_ids = [
+        result.chunks[i - 1].chunk_id
+        for i in matched_indices
+        if 1 <= i <= len(result.chunks)
+    ]
+    unmatched_ref_ids = [str(n) for n in unmatched_indices]
 
     session.append_turn(
         user_msg, cleaned_text, settings.chatbot_max_history_turns
@@ -323,49 +331,14 @@ async def _handle_message(
         reformulation_skipped,
         result,
         cleaned_text,
-        matched_ids,
-        unmatched_ids,
+        cited_chunk_ids,
+        unmatched_ref_ids,
         post_llm_refused,
         final_finish,
     )
 
 
 # ── Helpers ──────────────────────────────────────────────────────
-
-
-def _build_side_elements(
-    cited_short_ids: list[str],
-    chunks: list[KnowledgeChunk],
-    short_id_map: dict[str, str],
-) -> list[cl.Text]:
-    by_full_id = {c.chunk_id: c for c in chunks}
-    elements: list[cl.Text] = []
-    for sid in cited_short_ids:
-        full_id = short_id_map.get(sid)
-        if not full_id:
-            continue
-        chunk = by_full_id.get(full_id)
-        if chunk is None:
-            continue
-        pages = (
-            ", ".join(str(p) for p in chunk.page_numbers)
-            if chunk.page_numbers
-            else "(n/a)"
-        )
-        body = (
-            f"**Source:** {chunk.source_name or '(unknown)'}\n"
-            f"**Section:** {chunk.section_title or '(n/a)'}\n"
-            f"**Page(s):** {pages}\n"
-            f"**Relevance:** {chunk.relevance_score or 0.0:.4f}\n\n"
-            f"---\n\n"
-            f"{chunk.content}"
-        )
-        # Name MUST equal the literal ref token in the message text for
-        # Chainlit to auto-link it as a clickable badge.
-        elements.append(
-            cl.Text(name=f"ref:{sid}", content=body, display="side")
-        )
-    return elements
 
 
 async def _stream_and_update(out: cl.Message, text: str) -> None:
@@ -489,8 +462,8 @@ async def _log_success(
     reformulation_skipped: bool,
     result,
     answer: str,
-    cited_ids: list[str],
-    unmatched_ids: list[str],
+    cited_chunk_ids: list[str],
+    unmatched_ref_ids: list[str],
     post_llm_refused: bool,
     finish_reason: str | None,
 ) -> None:
@@ -512,8 +485,8 @@ async def _log_success(
             refusal_reason=None,
             top_chunk_scores_raw=raw,
             top_chunk_scores_normalized=norm,
-            cited_chunk_ids=cited_ids,
-            unmatched_ref_ids=unmatched_ids,
+            cited_chunk_ids=cited_chunk_ids,
+            unmatched_ref_ids=unmatched_ref_ids,
             post_llm_refusal=post_llm_refused,
             answer=answer[:4000],
             latency_ms_total=int((time.perf_counter() - start) * 1000),

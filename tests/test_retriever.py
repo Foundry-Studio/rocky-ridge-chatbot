@@ -8,7 +8,6 @@ import respx
 from chatbot import foundry_client
 from chatbot.retriever import (
     _RRF_SCORE_MAX,
-    _short_id,
     normalize_rrf_score,
     retrieve,
 )
@@ -28,17 +27,6 @@ def test_normalize_half_max_is_half():
 
 def test_normalize_clamps_above_max():
     assert normalize_rrf_score(_RRF_SCORE_MAX * 5) == 1.0
-
-
-def test_short_id_stable_for_same_uuid():
-    cid = "ceea25d1-3d24-4d12-a134-9343adc8cb32"
-    assert _short_id(cid) == "c_ceea25d1"
-
-
-def test_short_id_deterministic_length():
-    s = _short_id("abc-def-123")
-    assert s.startswith("c_")
-    assert len(s) == 10  # c_ + 8 hex
 
 
 def _make_client_against(mock_transport_url: str):
@@ -102,7 +90,8 @@ async def test_retrieve_happy_path_with_real_rrf_scores(settings):
     assert result.max_score_raw == pytest.approx(0.01666666)
     assert result.max_score_normalized > 0.5
     assert result.is_sufficient is True
-    assert "c_11111111" in result.short_id_map
+    assert len(result.chunks) == 1
+    assert result.chunks[0].chunk_id == "11111111-2222-3333-4444-555555555555"
 
 
 @pytest.mark.asyncio

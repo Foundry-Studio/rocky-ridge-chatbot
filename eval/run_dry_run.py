@@ -28,12 +28,11 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     )
 
 from chatbot import foundry_client  # noqa: E402
-from chatbot.citation_parser import extract_cited_ids, strip_unmatched  # noqa: E402
+from chatbot.citation_parser import strip_unmatched  # noqa: E402
 from chatbot.config import get_settings  # noqa: E402
 from chatbot.prompt_builder import build_answer_messages  # noqa: E402
 from chatbot.refusal_gate import should_refuse  # noqa: E402
 from chatbot.retriever import retrieve  # noqa: E402
-
 
 # In-corpus answerable (should be grounded, no refusal).
 IN_CORPUS = [
@@ -61,8 +60,8 @@ class TurnResult:
     max_norm_score: float
     refused_pre_gate: bool
     refused_model: bool
-    cited_ids: list[str]
-    unmatched_cites: list[str]
+    cited_indices: list[int]
+    unmatched_cites: list[int]
     answer: str
     latency_ms: int
     in_corpus_expected: bool
@@ -80,7 +79,7 @@ async def run_one(question: str, expected_in_corpus: bool) -> TurnResult:
             max_norm_score=result.max_score_normalized,
             refused_pre_gate=True,
             refused_model=False,
-            cited_ids=[],
+            cited_indices=[],
             unmatched_cites=[],
             answer="(pre-gate refusal)",
             latency_ms=int((time.perf_counter() - start) * 1000),
@@ -92,7 +91,6 @@ async def run_one(question: str, expected_in_corpus: bool) -> TurnResult:
         chunks=result.chunks,
         history=[],
         tenant_display_name=s.chatbot_tenant_display_name,
-        short_id_map=result.short_id_map,
         max_history_turns=s.chatbot_max_history_turns,
     )
     parts: list[str] = []
@@ -107,7 +105,9 @@ async def run_one(question: str, expected_in_corpus: bool) -> TurnResult:
             parts.append(chunk.content)
 
     raw_answer = "".join(parts)
-    cleaned, matched, unmatched = strip_unmatched(raw_answer, result.short_id_map)
+    cleaned, matched, unmatched = strip_unmatched(
+        raw_answer, max_index=len(result.chunks)
+    )
     refused_model = (
         "don't have enough information" in cleaned.lower()
         or "don't have grounded" in cleaned.lower()
@@ -118,7 +118,7 @@ async def run_one(question: str, expected_in_corpus: bool) -> TurnResult:
         max_norm_score=result.max_score_normalized,
         refused_pre_gate=False,
         refused_model=refused_model,
-        cited_ids=matched,
+        cited_indices=matched,
         unmatched_cites=unmatched,
         answer=cleaned,
         latency_ms=int((time.perf_counter() - start) * 1000),
@@ -132,14 +132,14 @@ def grade(r: TurnResult) -> tuple[str, str]:
     if r.in_corpus_expected:
         if refused:
             return "FAIL", "expected grounded answer but chatbot refused"
-        if not r.cited_ids:
+        if not r.cited_indices:
             return "WEAK", "answered without any citations (ungrounded)"
         if r.unmatched_cites:
             return (
                 "WEAK",
                 f"emitted {len(r.unmatched_cites)} fabricated citation(s), stripped",
             )
-        return "PASS", f"grounded with {len(r.cited_ids)} citation(s)"
+        return "PASS", f"grounded with {len(r.cited_indices)} citation(s)"
     else:
         if refused:
             return "PASS", "correctly refused out-of-corpus question"
@@ -158,7 +158,7 @@ async def main() -> int:
         r = await run_one(q, expected_in_corpus=True)
         g, why = grade(r)
         results.append((r, g, why))
-        print(f"- **{g}** — {q}  _(retrieved={r.retrieved_n}, norm={r.max_norm_score:.2f}, cites={len(r.cited_ids)}, latency={r.latency_ms}ms)_")
+        print(f"- **{g}** — {q}  _(retrieved={r.retrieved_n}, norm={r.max_norm_score:.2f}, cites={len(r.cited_indices)}, latency={r.latency_ms}ms)_")
 
     for q in OUT_OF_CORPUS:
         r = await run_one(q, expected_in_corpus=False)
@@ -172,12 +172,12 @@ async def main() -> int:
     fails = sum(1 for _, g, _ in results if g == "FAIL")
     total = len(results)
     print()
-    print(f"## Summary")
+    print("## Summary")
     print(f"- PASS: {passes}/{total}")
     print(f"- WEAK: {weaks}/{total}")
     print(f"- FAIL: {fails}/{total}")
     print()
-    print(f"## Pass criterion: ≥85% PASS across answerable + all out-of-corpus refuse.")
+    print("## Pass criterion: ≥85% PASS across answerable + all out-of-corpus refuse.")
     total_answerable = len(IN_CORPUS)
     answerable_passes = sum(
         1 for r, g, _ in results if r.in_corpus_expected and g == "PASS"

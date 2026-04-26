@@ -65,7 +65,6 @@ async def main() -> int:
         chunks=result.chunks,
         history=[],
         tenant_display_name=s.chatbot_tenant_display_name,
-        short_id_map=result.short_id_map,
         max_history_turns=s.chatbot_max_history_turns,
     )
 
@@ -87,7 +86,9 @@ async def main() -> int:
     print(f"\n\n[smoke] finish={finish}")
 
     raw = "".join(parts)
-    cleaned, matched, unmatched = strip_unmatched(raw, result.short_id_map)
+    cleaned, matched, unmatched = strip_unmatched(
+        raw, max_index=len(result.chunks)
+    )
     print(f"[smoke] citations matched={matched} unmatched={unmatched}")
 
     await foundry_client.close_client()

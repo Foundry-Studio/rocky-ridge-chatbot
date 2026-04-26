@@ -26,22 +26,38 @@ def test_system_prompt_includes_tenant_name_and_rules():
     prompt = build_system_prompt(
         tenant_display_name="Rocky Ridge Land Management",
         chunks=chunks,
-        short_id_map={"c_uuid1": "uuid-1"},
     )
     assert "Rocky Ridge Land Management" in prompt
     assert "Answer ONLY from the" in prompt
-    assert "[ref:<chunk_id>]" in prompt
-    assert '<chunk id="c_uuid1"' in prompt
+    # Numeric citation rule + format
+    assert "[N]" in prompt
+    assert 'number="1"' in prompt
     assert "fact" in prompt
 
 
 def test_system_prompt_chunk_rendering_escapes_quotes():
     chunks = [_mk_chunk("u1", "body", source='Name with "quotes"')]
-    prompt = build_system_prompt("Tenant", chunks, {"c_u1": "u1"})
+    prompt = build_system_prompt("Tenant", chunks)
     # Double quotes in source name were replaced with single quotes to
     # not break the XML-ish tag.
-    assert 'source="Name with' in prompt
-    assert 'quotes\'"' in prompt
+    assert "Name with 'quotes'" in prompt
+
+
+def test_system_prompt_chunks_numbered_one_indexed():
+    chunks = [
+        _mk_chunk("u1", "first"),
+        _mk_chunk("u2", "second"),
+        _mk_chunk("u3", "third"),
+    ]
+    prompt = build_system_prompt("Tenant", chunks)
+    assert 'number="1"' in prompt
+    assert 'number="2"' in prompt
+    assert 'number="3"' in prompt
+    # Order preserved — chunk content appears in sequence
+    pos1 = prompt.index("first")
+    pos2 = prompt.index("second")
+    pos3 = prompt.index("third")
+    assert pos1 < pos2 < pos3
 
 
 def test_answer_messages_trims_history_to_window():
@@ -56,7 +72,6 @@ def test_answer_messages_trims_history_to_window():
         chunks=chunks,
         history=history,
         tenant_display_name="T",
-        short_id_map={"c_u1": "u1"},
         max_history_turns=3,
     )
     # 1 system + 6 history (3 turns) + 1 user = 8
@@ -73,7 +88,6 @@ def test_answer_messages_empty_history():
         chunks=chunks,
         history=[],
         tenant_display_name="T",
-        short_id_map={"c_u1": "u1"},
         max_history_turns=6,
     )
     assert len(messages) == 2
@@ -92,7 +106,14 @@ def test_reformulation_messages_shape():
 
 
 def test_system_prompt_few_shot_examples_present():
-    prompt = build_system_prompt("T", [_mk_chunk("u1", "body")], {"c_u1": "u1"})
+    prompt = build_system_prompt("T", [_mk_chunk("u1", "body")])
     assert "<example>" in prompt
-    assert "c_a1b2c3d4" in prompt
+    # Few-shots use the new [N] format
+    assert "[1]" in prompt
     assert "<assistant>" in prompt
+
+
+def test_system_prompt_explains_multi_cite_form():
+    """Prompt must instruct [1][2] (separate brackets), not [1, 2]."""
+    prompt = build_system_prompt("T", [_mk_chunk("u1", "body")])
+    assert "[1][2]" in prompt
