@@ -119,7 +119,13 @@ def render_sources_section(
     if not cited_indices:
         return ""
 
-    lines: list[str] = ["", "---", "", "**Sources**", ""]
+    # NOTE on the leading blank lines: Markdown setext-style H2 syntax is
+    # "text\n---\n" → preceding text becomes a giant H2 heading. We need
+    # an explicit blank line BEFORE "---" so it's parsed as a thematic
+    # break (horizontal rule) instead of an underline. Two leading blank
+    # lines guarantee a paragraph break regardless of how the answer
+    # body ends (with or without trailing newline).
+    lines: list[str] = ["", "", "---", "", "### Sources", ""]
     for n in cited_indices:
         idx = n - 1
         if idx < 0 or idx >= len(chunks):

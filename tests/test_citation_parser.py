@@ -135,7 +135,7 @@ def test_render_single_citation_full_metadata():
         )
     ]
     out = render_sources_section(chunks, [1])
-    assert "**Sources**" in out
+    assert "### Sources" in out
     assert "**[1]**" in out
     assert "*Conservation Guide*" in out
     assert "*Canebrake Restoration*" in out
@@ -196,6 +196,21 @@ def test_render_separator_above_section():
     assert "\n---\n" in out
 
 
+def test_render_does_not_create_setext_h2_when_appended_to_answer():
+    """Regression: '<text>\\n---\\n' is CommonMark setext H2 syntax, which
+    would turn the answer's last line into a giant heading. The Sources
+    section MUST start with a blank line BEFORE the --- to ensure --- is
+    parsed as a thematic break, not as an underline."""
+    chunks = [_Chunk("body", source_name="X")]
+    answer = "The final sentence of the answer."
+    sources = render_sources_section(chunks, [1])
+    combined = answer + sources
+    # The transition: "answer.\n\n---" — there must be at least one blank
+    # line between the answer text and the '---' marker.
+    assert "answer.\n\n---" in combined or "answer.\n\n\n---" in combined
+    assert "answer.\n---" not in combined
+
+
 # ── Cross-module sanity: extract followed by render ─────────────────────
 
 
@@ -211,7 +226,7 @@ def test_full_pipeline_basic():
     assert unmatched == []
     assert "[1]" in cleaned
     assert "[2]" in cleaned
-    assert "**Sources**" in section
+    assert "### Sources" in section
     assert "*A*" in section
     assert "*B*" in section
 
