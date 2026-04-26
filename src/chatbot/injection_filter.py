@@ -19,11 +19,13 @@ _INJECTION_PATTERNS: list[re.Pattern[str]] = [
 ]
 
 # Distinctive phrases from our system prompt. If any appears in the model's
-# output, it probably leaked the system prompt.
+# output, it probably leaked the system prompt. Update when prompt is rewritten.
 _SYSTEM_PROMPT_LEAK_MARKERS = (
-    "Answer ONLY from the",
-    "knowledge base for this conversation",
-    "After every factual clause, cite",
+    "having an ongoing conversation with a user about",
+    "NEW factual claims must be supported by the <context>",
+    "Cite each new factual claim inline as [N]",
+    "Never invent chunk numbers",
+    "<conversation_so_far>",
 )
 
 

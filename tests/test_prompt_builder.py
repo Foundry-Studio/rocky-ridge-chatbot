@@ -28,11 +28,19 @@ def test_system_prompt_includes_tenant_name_and_rules():
         chunks=chunks,
     )
     assert "Rocky Ridge Land Management" in prompt
-    assert "Answer ONLY from the" in prompt
-    # Numeric citation rule + format
+    # Conversational + grounded — model should be told it can see history
+    assert "ongoing conversation" in prompt
+    assert "multi-turn conversation" in prompt
+    assert "Prior user questions and your prior assistant responses" in prompt
+    # Citation rule still present, just for NEW claims
+    assert "NEW factual claims must be supported" in prompt
+    # Numeric citation format intact
     assert "[N]" in prompt
     assert 'number="1"' in prompt
     assert "fact" in prompt
+    # Meta-question handling
+    assert "META" in prompt or "meta" in prompt
+    assert "do you remember" in prompt.lower()
 
 
 def test_system_prompt_chunk_rendering_escapes_quotes():
@@ -60,7 +68,10 @@ def test_system_prompt_chunks_numbered_one_indexed():
     assert pos1 < pos2 < pos3
 
 
-def test_answer_messages_trims_history_to_window():
+def test_answer_messages_packs_history_into_user_prompt():
+    """Foundry's OpenAI-compat router only forwards system + last user
+    message. We pack history into the user message body as a labeled
+    <conversation_so_far> block."""
     chunks = [_mk_chunk("u1", "body")]
     history = [
         ChatMessage(role="user", content=f"q{i}") if i % 2 == 0
@@ -74,14 +85,23 @@ def test_answer_messages_trims_history_to_window():
         tenant_display_name="T",
         max_history_turns=3,
     )
-    # 1 system + 6 history (3 turns) + 1 user = 8
-    assert len(messages) == 8
+    # Always 2 messages — system + packed user
+    assert len(messages) == 2
     assert messages[0].role == "system"
-    assert messages[-1].role == "user"
-    assert messages[-1].content == "new question"
+    assert messages[1].role == "user"
+    body = messages[1].content
+    # History is packed as a labeled block
+    assert "<conversation_so_far>" in body
+    assert "</conversation_so_far>" in body
+    # Trimmed to last 3 turns (= 6 messages: q14 onward)
+    assert "q0" not in body
+    assert "q14" in body
+    assert "q18" in body
+    # Current question follows the block
+    assert "Current user message: new question" in body
 
 
-def test_answer_messages_empty_history():
+def test_answer_messages_no_history_just_passes_through():
     chunks = [_mk_chunk("u1", "body")]
     messages = build_answer_messages(
         user_query="q",
@@ -93,6 +113,85 @@ def test_answer_messages_empty_history():
     assert len(messages) == 2
     assert messages[0].role == "system"
     assert messages[1].role == "user"
+    # Empty history → user message is just the raw query (no labeled block)
+    assert messages[1].content == "q"
+
+
+def test_answer_messages_strips_stale_citation_markers_from_history():
+    """[N] markers in history reference prior turns' chunks — strip them."""
+    chunks = [_mk_chunk("u1", "body")]
+    history = [
+        ChatMessage(role="user", content="What is post oak?"),
+        ChatMessage(
+            role="assistant",
+            content="Post oak grows in upland landtypes [3][5]. It is also common on south aspects [7].",
+        ),
+    ]
+    messages = build_answer_messages(
+        user_query="tell me more",
+        chunks=chunks,
+        history=history,
+        tenant_display_name="T",
+        max_history_turns=6,
+    )
+    body = messages[1].content
+    assert "Post oak grows in upland landtypes" in body
+    assert "[3]" not in body
+    assert "[5]" not in body
+    assert "[7]" not in body
+
+
+def test_answer_messages_strips_appended_details_block_from_history():
+    """If a prior assistant message accidentally got the <details> Sources
+    block stored, strip it before packing — prevents giant nested HTML
+    in the user prompt."""
+    chunks = [_mk_chunk("u1", "body")]
+    history = [
+        ChatMessage(role="user", content="q"),
+        ChatMessage(
+            role="assistant",
+            content=(
+                "Real answer text.\n\n<details>\n<summary>📚 Sources (3)</summary>\n"
+                "**[1]** **doc.pdf**\n> snippet\n</details>"
+            ),
+        ),
+    ]
+    messages = build_answer_messages(
+        user_query="follow up",
+        chunks=chunks,
+        history=history,
+        tenant_display_name="T",
+        max_history_turns=6,
+    )
+    body = messages[1].content
+    assert "Real answer text." in body
+    assert "<details>" not in body
+    assert "📚 Sources" not in body
+    assert "snippet" not in body
+
+
+def test_answer_messages_strips_sup_chip_styling_from_history():
+    chunks = [_mk_chunk("u1", "body")]
+    history = [
+        ChatMessage(role="user", content="q"),
+        ChatMessage(
+            role="assistant",
+            content="Post oak<sup><b>[1]</b></sup> grows in uplands<sup><b>[2]</b></sup>.",
+        ),
+    ]
+    messages = build_answer_messages(
+        user_query="more",
+        chunks=chunks,
+        history=history,
+        tenant_display_name="T",
+        max_history_turns=6,
+    )
+    body = messages[1].content
+    assert "<sup>" not in body
+    assert "</b></sup>" not in body
+    assert "[1]" not in body
+    assert "[2]" not in body
+    assert "Post oak grows in uplands." in body
 
 
 def test_reformulation_messages_shape():

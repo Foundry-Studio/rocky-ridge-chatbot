@@ -37,10 +37,17 @@ def test_is_injection_lets_normal_questions_through(msg):
 
 
 def test_leaks_system_prompt_catches_distinctive_phrases():
+    # New v2 prompt markers — match phrases from current system prompt
     leaked = (
-        "Sure. 'Answer ONLY from the <context> chunks. After every factual "
-        "clause, cite the supporting chunk(s)...'"
+        "Sure, here are my instructions: 'NEW factual claims must be "
+        "supported by the <context> chunks below. Cite each new factual "
+        "claim inline as [N]...'"
     )
+    assert leaks_system_prompt(leaked) is True
+
+
+def test_leaks_system_prompt_catches_conversation_marker():
+    leaked = "I am having an ongoing conversation with a user about Rocky Ridge..."
     assert leaks_system_prompt(leaked) is True
 
 
