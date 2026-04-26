@@ -8,6 +8,15 @@ healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
 
-[[deploy.volumes]]
-mountPath = "/data"
-name = "chatbot-logs"
+# Volume removed: the `chatbot-logs` volume was never created in Railway,
+# and recent Railway-side validation appears to silently fail rollouts that
+# reference non-existent volumes (deploymentStopped=True after a successful
+# healthcheck). The chatbot writes JSON conversation logs to ./conversations
+# on ephemeral container storage; logs are lost on redeploy. Acceptable for
+# the demo scope. To restore persistent logging:
+#   1. Create the volume via dashboard or CLI:
+#        railway volume add --service rocky-ridge-chatbot --mount-path /data
+#   2. Re-add this block:
+#        [[deploy.volumes]]
+#        mountPath = "/data"
+#        name = "<created-volume-name>"
