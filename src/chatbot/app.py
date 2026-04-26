@@ -17,6 +17,7 @@ from chatbot.citation_parser import (
     UNMATCHED_WARNING,
     render_sources_section,
     strip_unmatched,
+    stylize_inline_citations,
 )
 from chatbot.config import get_settings
 from chatbot.conversation_log import ConversationLog, LogEntry, utcnow_iso
@@ -291,11 +292,19 @@ async def _handle_message(
         )
         matched_indices = []
 
+    # Stylize inline [N] markers as superscript chips (HTML5).
+    styled_text = stylize_inline_citations(cleaned_text)
+
     # Prepend warning banner if fake citations were dropped, then append
-    # the Markdown Sources section listing only the chunks the model cited.
+    # the collapsible Sources block enriched with file-level metadata
+    # (filename, ingestion date, authority, match score, etc.).
     warning = UNMATCHED_WARNING if unmatched_indices else ""
-    sources_md = render_sources_section(result.chunks, matched_indices)
-    final_visible_text = warning + cleaned_text + sources_md
+    sources_md = render_sources_section(
+        result.chunks,
+        matched_indices,
+        file_metadata_by_id=result.file_metadata_by_id,
+    )
+    final_visible_text = warning + styled_text + sources_md
 
     # Replace bubble content. NO Chainlit elements — pure Markdown to
     # sidestep the multi-turn display="side" bug cluster (see plan UX

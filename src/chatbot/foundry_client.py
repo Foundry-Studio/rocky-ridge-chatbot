@@ -50,6 +50,8 @@ class KnowledgeChunk(BaseModel):
     section_title: str | None = None
     authority_level: str | None = None
     source_id: str | None = None
+    chunk_type: str | None = None  # "text" / "figure_caption" — surfacing as a credibility cue
+    retrieval_method: str | None = None  # "bm25_fulltext" / "pinecone_cosine" / "both"
 
 
 class KnowledgeSearchResponse(BaseModel):
@@ -59,6 +61,21 @@ class KnowledgeSearchResponse(BaseModel):
     total: int
     query: str
     tenant_id: str
+
+
+class FileMetadata(BaseModel):
+    """File-level metadata returned by /api/v1/knowledge/file-chunks."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    file_id: str
+    original_filename: str | None = None
+    mime_type: str | None = None
+    size_bytes: int | None = None
+    processing_status: str | None = None
+    source_id: str | None = None
+    source_name: str | None = None
+    created_at: str | None = None  # ISO 8601
 
 
 @dataclass(frozen=True)
@@ -186,6 +203,69 @@ async def search_knowledge(
         return KnowledgeSearchResponse.model_validate(resp.json())
     except Exception as e:
         raise FoundryMalformedResponseError(f"parse failed: {e}") from e
+
+
+async def get_file_metadata(
+    tenant_id: str,
+    source_file_id: str,
+    request_id: str | None = None,
+    settings: Settings | None = None,
+) -> FileMetadata | None:
+    """Fetch file-level metadata via /api/v1/knowledge/file-chunks.
+
+    Returns None on:
+      - 4xx (file not found / wrong tenant — Foundry returns file=null silently)
+      - transport / timeout errors (best-effort enrichment, never blocks the
+        retrieval flow)
+
+    Calls with chunk_limit=1 because we only need the file metadata; the
+    one chunk we get back is discarded.
+    """
+    s = settings or get_settings()
+    client = get_client(s)
+    req_id = request_id or str(uuid.uuid4())
+    body = {
+        "tenant_id": tenant_id,
+        "source_file_id": source_file_id,
+        "chunk_start": 0,
+        "chunk_limit": 1,
+    }
+    try:
+        resp = await client.post(
+            "/api/v1/knowledge/file-chunks",
+            json=body,
+            headers={"X-Request-ID": req_id},
+            timeout=s.retrieval_timeout_s,
+        )
+    except (httpx.TimeoutException, httpx.TransportError) as e:
+        logger.warning("file-chunks fetch failed for %s: %s", source_file_id, e)
+        return None
+
+    if resp.status_code != 200:
+        if resp.status_code in (401, 403):
+            # Surface auth issues — don't silently degrade
+            raise FoundryAuthError(
+                f"file-chunks auth failed: HTTP {resp.status_code}"
+            )
+        logger.warning(
+            "file-chunks non-200 for %s: %d %s",
+            source_file_id, resp.status_code, resp.text[:200],
+        )
+        return None
+
+    try:
+        data = resp.json()
+    except Exception as e:
+        logger.warning("file-chunks JSON parse failed: %s", e)
+        return None
+    file_obj = data.get("file")
+    if not file_obj:
+        return None
+    try:
+        return FileMetadata.model_validate(file_obj)
+    except Exception as e:
+        logger.warning("file-chunks metadata validation failed: %s", e)
+        return None
 
 
 async def stream_chat(

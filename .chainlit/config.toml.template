@@ -5,7 +5,12 @@ user_env = []
 allow_origins = ["*"]
 
 [features]
-unsafe_allow_html = false
+# Enabled to support: <details>/<summary> for collapsible Sources block,
+# <sup> for superscript citation chips, and HTML-escaped chunk content
+# rendering. Chunk-derived content is HTML-escaped before embedding
+# (citation_parser.render_sources_section); user input is sanitized by
+# the injection_filter pre-LLM. XSS surface kept narrow.
+unsafe_allow_html = true
 latex = false
 edit_message = false
 
