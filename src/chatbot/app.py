@@ -70,11 +70,18 @@ async def on_start() -> None:
     # Kick off a Foundry probe in the background — surfaces misconfig early.
     _, _ = await healthcheck.probe(settings)
     welcome = (
-        f"Hello — I answer questions about **{settings.chatbot_tenant_display_name}** "
-        "using only its own knowledge base.\n\n"
-        "Every claim I make will be cited — click the `ref:...` badges to see the "
-        "source text. If I can't find grounded information, I'll tell you directly "
-        "rather than guess.\n\n"
+        f"Welcome — I'm **{settings.chatbot_tenant_display_name}**'s research assistant.\n\n"
+        "I answer questions grounded in **57 academic and research documents** "
+        "in our library — peer-reviewed papers, NRCS publications, and field "
+        "literature on canebrake restoration, wildlife habitat, prescribed "
+        "fire, and southeastern land management — drawing on research curated "
+        "and approved by **Patience Knight and the team at Alabama A&M "
+        "University**.\n\n"
+        "Ask me anything about Rocky Ridge's work or the science behind it. "
+        "I'll cite every claim — click a **[1]** in my answer to see the "
+        "source passage, or expand **🔬 Research** under each reply to see "
+        "exactly what I read to get there.\n\n"
+        "If I can't find grounded information, I'll say so rather than guess.\n\n"
         "_Conversations are logged for demo review and deleted after 30 days._"
     )
     await cl.Message(
@@ -145,20 +152,22 @@ async def _handle_message(
     the final answer to a Chainlit message, then renders citations +
     Sources block + research-trace block.
 
-    Status updates fire to a parent Chainlit Step ('🔬 Researching…')
-    while tool calls execute. The final answer message is created
-    OUTSIDE that Step (per Chainlit best practice — see issue #1372 /
-    #2365: a Message inside a Step renders inside the disclosure).
+    Status updates fire to a parent Chainlit Step ('🔬 Research') while
+    tool calls execute. The final answer message is created OUTSIDE
+    that Step (per Chainlit best practice — see issue #1372 / #2365: a
+    Message inside a Step renders inside the disclosure). Step name is
+    a noun so Chainlit's auto-generated past-tense label reads cleanly
+    after completion ("Used 🔬 Research").
     """
     history = session.get_history()
     turn_n = len(history) // 2 + 1
 
-    # Open the parent "Researching…" step BEFORE the answer message —
+    # Open the parent "Research" step BEFORE the answer message —
     # ordering matters for Chainlit UI (#2365 workaround).
     research_step: cl.Step | None = None
     try:
         research_step = cl.Step(
-            name="🔬 Researching…", type="run", default_open=False
+            name="🔬 Research", type="run", default_open=False
         )
         await research_step.send()
     except Exception as e:
