@@ -63,6 +63,35 @@ REJECT_TEXT_BUDGET = (
 )
 
 
+@cl.set_starters
+async def set_starters() -> list[cl.Starter]:
+    """Sample-question cards shown on the welcome screen.
+
+    Chainlit renders these as clickable suggestion cards beneath the chat
+    input on session start. Clicking a card sends the ``message`` text as
+    if the user had typed it. Cards disappear after the first user
+    message — they're an onboarding affordance, not a persistent sidebar.
+    """
+    return [
+        cl.Starter(
+            label="How are you different from a normal AI?",
+            message="How are you different from a typical AI chatbot like ChatGPT? Why does it matter that you only use this knowledge base?",
+        ),
+        cl.Starter(
+            label="What's in your knowledge base?",
+            message="What kinds of documents are in your knowledge base, and what topics do they cover?",
+        ),
+        cl.Starter(
+            label="How does this support our grant work?",
+            message="How does this knowledge base help support the work of Rocky Ridge's restoration grant?",
+        ),
+        cl.Starter(
+            label="Tell me about canebrake restoration",
+            message="What does the research in your library say about canebrake restoration in the southeastern United States?",
+        ),
+    ]
+
+
 @cl.on_chat_start
 async def on_start() -> None:
     session.init_session()
@@ -71,11 +100,17 @@ async def on_start() -> None:
     _, _ = await healthcheck.probe(settings)
     welcome = (
         f"Welcome — I'm **{settings.chatbot_tenant_display_name}**'s research assistant.\n\n"
-        "I answer questions grounded in **57 academic and research documents** "
-        "in our library — peer-reviewed papers, NRCS publications, and field "
-        "literature on canebrake restoration, wildlife habitat, prescribed "
-        "fire, and southeastern land management — drawing on research curated "
-        "and approved by **Patience Knight and the team at Alabama A&M "
+        "**I'm not a typical AI chatbot.** I don't draw on general training "
+        "data or live web searches — both of which can be stale, "
+        "off-topic, or simply wrong for your work. I operate inside a "
+        "**closed-loop, purpose-built knowledge base** assembled and "
+        "reviewed for this project, so every answer I give is traceable "
+        "back to a specific passage in a specific document.\n\n"
+        "That knowledge base contains **57 academic and research documents** — "
+        "peer-reviewed papers, NRCS publications, and field literature on "
+        "canebrake restoration, wildlife habitat, prescribed fire, and "
+        "southeastern land management — drawing on research curated and "
+        "approved by **Patience Knight and the team at Alabama A&M "
         "University**.\n\n"
         "Ask me anything about Rocky Ridge's work or the science behind it. "
         "I'll cite every claim — click a **[1]** in my answer to see the "
