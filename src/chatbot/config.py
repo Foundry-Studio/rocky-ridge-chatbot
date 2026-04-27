@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     # ── Message length ──────────────────────────────────────────
     message_len_max: int = Field(default=2000, ge=100, le=10000)
 
+    # ── Agentic loop ────────────────────────────────────────────
+    chatbot_max_agent_iterations: int = Field(default=6, ge=1, le=12)
+    chatbot_max_agent_wall_clock_sec: float = Field(default=60.0, ge=10.0, le=300.0)
+
     # ── Logging ─────────────────────────────────────────────────
     chatbot_log_path: str = "/data/conversations.jsonl"
     chatbot_log_rotate_mb: int = Field(default=100, ge=1, le=2048)

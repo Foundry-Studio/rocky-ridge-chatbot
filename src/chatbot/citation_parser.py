@@ -165,6 +165,80 @@ def _normalize_score(raw: float) -> float:
     return min(raw / rrf_max, 1.0)
 
 
+def render_sources_section_global(
+    chunks_by_n: dict[int, KnowledgeChunk],
+    cited_indices: list[int],
+    file_metadata_by_id: dict[str, FileMetadata] | None = None,
+) -> str:
+    """Sources block for the agentic loop using the GLOBAL [N] → chunk map.
+
+    Differs from render_sources_section (positional list-based): in the
+    agentic case chunks come from multiple tool calls and N is assigned
+    monotonically across all of them. Caller passes ``chunks_by_n`` =
+    ``{N: KnowledgeChunk}`` and the list of N's the model actually
+    cited (after strip_unmatched).
+    """
+    if not cited_indices:
+        return ""
+    # Adapt to the existing renderer by building a dense list ordered by
+    # cited_indices, but using a fake ``chunks`` array that mirrors the
+    # global N → chunk mapping. We still pass cited_indices through.
+    # Easier: inline the same render logic.
+    fm_map = file_metadata_by_id or {}
+    parts: list[str] = [
+        "",
+        "",
+        "<details>",
+        f"<summary>📚 Sources ({len(cited_indices)})</summary>",
+        "",
+    ]
+    for n in cited_indices:
+        chunk = chunks_by_n.get(n)
+        if chunk is None:
+            continue
+        meta = fm_map.get(chunk.source_file_id) if chunk.source_file_id else None
+        doc_name = (
+            meta.original_filename
+            if meta and meta.original_filename
+            else (chunk.section_title or "Unknown document")
+        )
+        doc_name_safe = html.escape(doc_name)
+        library = chunk.source_name or (meta.source_name if meta else "Unknown library")
+        meta_bits: list[str] = [f"📚 {html.escape(library)}"]
+        if chunk.section_title and not doc_name.startswith(chunk.section_title):
+            meta_bits.append(f"📑 Section: *{html.escape(chunk.section_title)}*")
+        if chunk.page_numbers:
+            pages_str = ", ".join(str(p) for p in chunk.page_numbers)
+            meta_bits.append(f"📃 Page(s): {html.escape(pages_str)}")
+        meta_bits.append(
+            f"✓ Authority: {html.escape(_format_authority(chunk.authority_level))}"
+        )
+        match_pct = round(_normalize_score(chunk.relevance_score or 0.0) * 100)
+        match_type = _format_match_type(chunk.retrieval_method)
+        meta_bits.append(f"🎯 Match: {match_pct}% ({html.escape(match_type)})")
+        if chunk.chunk_type and chunk.chunk_type != "text":
+            meta_bits.append(f"🏷️ Type: {html.escape(chunk.chunk_type)}")
+        if meta:
+            ingested = _format_ingested(meta.created_at)
+            if ingested:
+                meta_bits.append(f"📅 Ingested: {ingested}")
+            size = _format_size_kb(meta.size_bytes)
+            if size:
+                meta_bits.append(f"💾 {size}")
+        ref_short = chunk.chunk_id[:8] if chunk.chunk_id else "—"
+        meta_bits.append(f"🔖 Ref: c_{html.escape(ref_short)}")
+        meta_line = " · ".join(meta_bits)
+        snippet = _truncate_snippet(chunk.content or "")
+        parts.append(f"**[{n}]** **{doc_name_safe}**  ")
+        parts.append(meta_line)
+        parts.append("")
+        if snippet:
+            parts.append(f"> {html.escape(snippet)}")
+        parts.append("")
+    parts.append("</details>")
+    return "\n".join(parts)
+
+
 def render_sources_section(
     chunks: list[KnowledgeChunk],
     cited_indices: list[int],

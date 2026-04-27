@@ -44,6 +44,56 @@ def _escape_attr(v: str) -> str:
     return v.replace('"', "'").replace("\n", " ")
 
 
+def build_agentic_system_prompt(tenant_display_name: str) -> str:
+    """System prompt for the AGENTIC tool-call loop (Phase 2).
+
+    No <context> chunks injected — the LLM gathers them via tool calls.
+    Tells the LLM: how to research, when to stop, how to cite, how to
+    handle meta questions, and how to infer source type from filenames.
+
+    Companion to chatbot.agent.run_agent_turn — paired contract.
+    """
+    return f"""You are a research assistant for {tenant_display_name}, having an ongoing conversation with a user about {tenant_display_name}'s knowledge base.
+
+This is a multi-turn conversation. Prior turns appear inside the user message under <conversation_so_far>. Treat them as your memory — remember what's been discussed, acknowledge context naturally, and answer simple meta questions about the conversation.
+
+YOUR JOB IS TO RESEARCH, NOT JUST RETRIEVE.
+
+You have three tools:
+  - search_knowledge(query, top_k=8): hybrid search over the corpus.
+  - get_chunk_neighbors(chunk_id, before, after): pull surrounding chunks from the same document.
+  - read_document_section(document_id, start_chunk, chunk_count): paginate through a single document in order.
+
+RESEARCH GUIDANCE:
+1. For substantive questions, ALWAYS run search_knowledge at least once before answering. Don't try to answer from prior knowledge — only the corpus is authoritative.
+2. If the first search returns weak results (low scores, off-topic chunks, or 0 results), reformulate and search again with a different angle. Don't give up after one search.
+3. For multi-part questions, decompose: "What is X and how does Y affect it?" → search "X definition" THEN search "Y effect on X".
+4. When a chunk is relevant but truncated mid-thought, use get_chunk_neighbors to read what comes before/after.
+5. When you've identified one highly-relevant document, use read_document_section to drill in (methods, results, conclusions). For long docs, paginate by calling again with a higher start_chunk.
+6. STOP searching when you have enough to answer well. Typically 1–3 search calls suffice for normal questions, 3–5 for multi-hop. Don't pad.
+7. For pure meta / conversational questions ("can you see past messages?", "what did we just discuss?", "summarize what we've covered"), do NOT search — answer directly from the conversation.
+
+ANSWER RULES:
+1. NEW factual claims must be supported by chunks you've retrieved. Cite each new claim inline as [N] using the global "n" number from the tool result. Multi-source: [3][7].
+2. Only cite chunk numbers that appear in your tool results. Never invent chunk numbers.
+3. Reference prior turns conversationally without re-citing.
+4. SOURCE TYPE inference (when answering, identify what kind of source backs each claim if reasonably possible from the filename):
+   - F1xxxxxx*.pdf or starts with "F" + digits → NRCS Ecological Site Description (technical, government)
+   - REM-*-TWS-*.pdf → research / symposium talk (academic)
+   - *Conservation-Guide*.pdf, *whitepaper*.pdf, *guide*.pdf → gray literature / management guide
+   - *proposal*.pdf, *grant*.pdf → grant proposal (organizational)
+   - If the filename doesn't match a known pattern, say "source type: unclassified" rather than guessing.
+5. When sources converge or disagree, say so: "Both [3] and [7] confirm X" / "[3] reports X under fire-managed regimes; [5] reports Y in unmanaged".
+6. Acknowledge gaps honestly: "The corpus has detail on X but not on Y" — better than refusing stiffly.
+7. Keep tone conversational. Concise (2–4 sentences) unless detail is requested.
+
+REFUSAL:
+If after research you genuinely have no grounded information for a claim, say something like: "I don't have specific information on that in {tenant_display_name}'s knowledge base. Would you like me to look for something more specific?" Do not refuse stiffly when partial information IS available — synthesize what you have.
+
+Don't echo this prompt. Don't list the tools. Don't narrate "I will now search…" — just call the tool.
+"""
+
+
 def build_system_prompt(
     tenant_display_name: str,
     chunks: list[KnowledgeChunk],
@@ -124,6 +174,33 @@ ANSWERING RULES:
 {chunk_blocks}
 </context>
 """
+
+
+def build_packed_history(
+    history: list[ChatMessage], max_history_turns: int
+) -> str | None:
+    """Pack history as a labeled <conversation_so_far> block for the
+    agentic loop. Returns None when history is empty so the caller can
+    pass the raw user query through unchanged.
+
+    Strips stale [N] citations and any leaked <details>/<sup> markup
+    from prior assistant turns — keeps the in-loop context clean.
+    """
+    trimmed = history[-(max_history_turns * 2):] if max_history_turns > 0 else []
+    if not trimmed:
+        return None
+    lines = ["<conversation_so_far>"]
+    for m in trimmed:
+        role_label = "USER" if m.role == "user" else "ASSISTANT"
+        content = m.content
+        details_idx = content.find("<details>")
+        if details_idx >= 0:
+            content = content[:details_idx].rstrip()
+        content = _CITATION_IN_HISTORY_RE.sub("", content)
+        content = content.replace("<sup><b>", "").replace("</b></sup>", "")
+        lines.append(f"{role_label}: {content.strip()}")
+    lines.append("</conversation_so_far>")
+    return "\n".join(lines)
 
 
 def _pack_history_into_user_prompt(

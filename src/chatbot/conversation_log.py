@@ -43,6 +43,15 @@ class LogEntry:
     latency_ms_retrieval: int
     error: str | None
     finish_reason: str | None
+    # ── Agentic-loop fields (Phase 2). All optional; absent on legacy
+    # one-shot turns. ────────────────────────────────────────────────
+    agent_iterations: int = 0
+    agent_tool_calls: list[dict] | None = None  # serialized ToolCallTrace
+    agent_chunks_seen_count: int = 0
+    agent_input_tokens: int = 0
+    agent_output_tokens: int = 0
+    agent_estimated_cost_usd: float = 0.0
+    agent_finish_reason: str | None = None  # ok / graceful_cap / auth_error / transient / no_research
 
 
 class ConversationLog:

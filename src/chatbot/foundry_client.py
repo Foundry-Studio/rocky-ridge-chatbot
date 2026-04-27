@@ -21,6 +21,7 @@ from typing import Any
 
 import httpx
 from httpx_sse import EventSource
+from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict
 
 from chatbot.config import Settings, get_settings
@@ -97,10 +98,82 @@ class StreamChunk:
     finish_reason: str | None = None
 
 
+@dataclass(frozen=True)
+class ToolCall:
+    """Single tool call in an assistant response (OpenAI shape)."""
+
+    id: str
+    name: str
+    arguments: str  # JSON string as emitted by the model
+
+
+@dataclass(frozen=True)
+class AssistantResponse:
+    """Non-streamed completion response with tool support.
+
+    Either ``content`` (plain text final answer) or ``tool_calls`` (one
+    or more tool requests) will be populated. Both can be present —
+    Anthropic supports text + tool_use in the same response.
+    """
+
+    content: str
+    tool_calls: list[ToolCall]
+    finish_reason: str | None  # "stop" | "tool_calls" | "length" | "content_filter"
+    input_tokens: int
+    output_tokens: int
+
+    @property
+    def has_tool_calls(self) -> bool:
+        return bool(self.tool_calls)
+
+
 # ── Singleton client (lazy-init, closed on Chainlit shutdown) ──────────
 
 
 _client: httpx.AsyncClient | None = None
+_openai_client: AsyncOpenAI | None = None
+
+
+def get_openai_client(settings: Settings | None = None) -> AsyncOpenAI:
+    """Lazy-init AsyncOpenAI pointed at our Foundry roster endpoint.
+
+    The OpenAI SDK is used as a typed transport — it talks to
+    foundry-agent-system's OpenAI-compat router (NOT to openai.com).
+    Foundry then routes to Anthropic via the LLM Roster (D-018 compliant
+    — caller never imports anthropic SDK).
+
+    Headers required by Foundry (X-Internal-Token, X-Actor-Type,
+    X-Actor-ID) are passed via ``default_headers``. Per-request
+    X-Request-ID gets attached via ``extra_headers`` at call time.
+    """
+    global _openai_client
+    if _openai_client is None:
+        s = settings or get_settings()
+        _openai_client = AsyncOpenAI(
+            base_url=s.foundry_api_base_url.rstrip("/") + "/api/v1/roster/v1",
+            api_key=s.foundry_internal_token,  # required by SDK; not used by Foundry
+            default_headers={
+                "X-Internal-Token": s.foundry_internal_token,
+                "X-Actor-Type": "ai_assistant",
+                "X-Actor-ID": s.chatbot_actor_id,
+            },
+            timeout=s.llm_timeout_s,
+            max_retries=0,  # we own retry policy upstream
+        )
+    return _openai_client
+
+
+async def close_openai_client() -> None:
+    global _openai_client
+    if _openai_client is not None:
+        await _openai_client.close()
+        _openai_client = None
+
+
+def set_test_openai_client(client: AsyncOpenAI | None) -> None:
+    """Inject a pre-configured OpenAI client for tests."""
+    global _openai_client
+    _openai_client = client
 
 
 def get_client(settings: Settings | None = None) -> httpx.AsyncClient:
@@ -266,6 +339,158 @@ async def get_file_metadata(
     except Exception as e:
         logger.warning("file-chunks metadata validation failed: %s", e)
         return None
+
+
+async def complete_chat_with_tools(
+    openai_messages: list[dict[str, Any]],
+    model_id: str,
+    temperature: float,
+    max_tokens: int,
+    tools: list[dict[str, Any]] | None = None,
+    request_id: str | None = None,
+    settings: Settings | None = None,
+) -> AssistantResponse:
+    """Non-streamed chat completion with tool support, using AsyncOpenAI SDK.
+
+    The SDK is pointed at our Foundry roster endpoint via base_url. We talk
+    OpenAI-compat protocol; Foundry routes to Anthropic. D-018 compliant —
+    no anthropic SDK import.
+
+    ``openai_messages`` is the FULL multi-turn message array including
+    prior assistant turns (with tool_calls) and tool result messages.
+    The Foundry roster (post-VKC-Phase-2 patch, commit 6bbb3e23 on
+    foundry-agent-system) preserves these via _build_foundry_messages_multi_turn.
+
+    Returns AssistantResponse with text content, tool_calls (if any),
+    finish_reason, and token usage. Raises FoundryAuthError on 401/403,
+    FoundryTransientError on 5xx/timeout, FoundryMalformedResponseError
+    on parse failures.
+    """
+    import openai as _openai
+
+    s = settings or get_settings()
+    client = get_openai_client(s)
+    req_id = request_id or str(uuid.uuid4())
+
+    try:
+        resp = await client.chat.completions.create(
+            model=model_id,
+            messages=openai_messages,  # type: ignore[arg-type]
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tools=tools,  # type: ignore[arg-type]
+            stream=False,
+            extra_headers={"X-Request-ID": req_id},
+        )
+    except _openai.AuthenticationError as e:
+        logger.error(
+            "*** FoundryAuthError on chat completion (auth): %s — "
+            "CHECK CHATBOT_INTERNAL_TOKEN ***",
+            e,
+        )
+        raise FoundryAuthError(f"openai auth: {e}") from e
+    except _openai.PermissionDeniedError as e:
+        logger.error(
+            "*** FoundryAuthError on chat completion (permission): %s ***", e
+        )
+        raise FoundryAuthError(f"openai permission denied: {e}") from e
+    except _openai.APIStatusError as e:
+        if e.status_code in (401, 403):
+            raise FoundryAuthError(
+                f"openai status {e.status_code}: {e}"
+            ) from e
+        if e.status_code >= 500:
+            raise FoundryTransientError(
+                f"openai 5xx: {e.status_code}: {e}"
+            ) from e
+        raise FoundryMalformedResponseError(
+            f"openai {e.status_code}: {e}"
+        ) from e
+    except (_openai.APITimeoutError, _openai.APIConnectionError) as e:
+        raise FoundryTransientError(f"openai transport: {e}") from e
+    except Exception as e:
+        raise FoundryMalformedResponseError(
+            f"openai unexpected: {type(e).__name__}: {e}"
+        ) from e
+
+    if not resp.choices:
+        raise FoundryMalformedResponseError("response has no choices")
+    choice = resp.choices[0]
+    msg = choice.message
+    content = msg.content or ""
+    raw_tool_calls = msg.tool_calls or []
+    tool_calls = [
+        ToolCall(
+            id=tc.id,
+            name=tc.function.name,
+            arguments=tc.function.arguments or "{}",
+        )
+        for tc in raw_tool_calls
+    ]
+    usage = resp.usage
+    return AssistantResponse(
+        content=content,
+        tool_calls=tool_calls,
+        finish_reason=choice.finish_reason,
+        input_tokens=usage.prompt_tokens if usage else 0,
+        output_tokens=usage.completion_tokens if usage else 0,
+    )
+
+
+async def stream_final_answer(
+    openai_messages: list[dict[str, Any]],
+    model_id: str,
+    temperature: float,
+    max_tokens: int,
+    request_id: str | None = None,
+    settings: Settings | None = None,
+) -> AsyncIterator[StreamChunk]:
+    """Stream the FINAL answer text via AsyncOpenAI SDK (no tools — caller
+    has decided no more tool rounds).
+
+    Use this for the final iteration after the agent loop has finished
+    gathering. Yields StreamChunk(content, finish_reason). Tool calls
+    are NOT supported in this path — call complete_chat_with_tools for
+    iterations that may need tool dispatch.
+    """
+    import openai as _openai
+
+    s = settings or get_settings()
+    client = get_openai_client(s)
+    req_id = request_id or str(uuid.uuid4())
+
+    try:
+        stream = await client.chat.completions.create(
+            model=model_id,
+            messages=openai_messages,  # type: ignore[arg-type]
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=True,
+            extra_headers={"X-Request-ID": req_id},
+        )
+        async for chunk in stream:
+            if not chunk.choices:
+                continue
+            choice = chunk.choices[0]
+            delta = choice.delta
+            content = (delta.content or "") if delta else ""
+            finish = choice.finish_reason
+            if content or finish:
+                yield StreamChunk(content=content, finish_reason=finish)
+    except _openai.AuthenticationError as e:
+        raise FoundryAuthError(f"stream auth: {e}") from e
+    except _openai.APIStatusError as e:
+        if e.status_code in (401, 403):
+            raise FoundryAuthError(f"stream status {e.status_code}") from e
+        if e.status_code >= 500:
+            raise FoundryTransientError(
+                f"stream 5xx: {e.status_code}"
+            ) from e
+        raise FoundryMalformedResponseError(
+            f"stream {e.status_code}"
+        ) from e
+    except (_openai.APITimeoutError, _openai.APIConnectionError) as e:
+        raise FoundryTransientError(f"stream transport: {e}") from e
 
 
 async def stream_chat(

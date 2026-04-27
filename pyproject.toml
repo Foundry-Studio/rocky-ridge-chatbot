@@ -19,6 +19,15 @@ dependencies = [
     "structlog>=24.1,<25.0",
     "tenacity>=8.2,<9.0",
     "PyYAML>=6.0,<7.0",
+    # OpenAI SDK used as a typed client for our OpenAI-compatible
+    # Foundry roster endpoint. Handles streaming + tool_calls deltas
+    # natively. Tim approved 2026-04-26 as the agentic-RAG (Phase 2)
+    # dependency add. Note: D-018/031/077 prohibit direct vendor SDK
+    # use against vendor APIs — using the SDK as a typed transport
+    # against our own roster URL does not call OpenAI; it talks to
+    # foundry-agent-system, which then routes to Anthropic via the
+    # roster. Compliant.
+    "openai>=1.50,<2.0",
 ]
 
 [project.optional-dependencies]

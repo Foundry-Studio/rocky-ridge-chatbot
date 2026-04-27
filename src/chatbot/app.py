@@ -6,35 +6,28 @@ grounded in Foundry's retrieval. See README.md for architecture.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
+from dataclasses import asdict
 
 import chainlit as cl
 
 from chatbot import foundry_client, healthcheck, injection_filter, session
+from chatbot.agent import AgentTurnResult, run_agent_turn
 from chatbot.citation_parser import (
     UNMATCHED_WARNING,
-    render_sources_section,
+    render_sources_section_global,
     strip_unmatched,
     stylize_inline_citations,
 )
 from chatbot.config import get_settings
 from chatbot.conversation_log import ConversationLog, LogEntry, utcnow_iso
-from chatbot.cost import estimate_cost_usd
-from chatbot.exceptions import (
-    FoundryAuthError,
-    FoundryMalformedResponseError,
-    FoundryTransientError,
-)
-from chatbot.prompt_builder import build_answer_messages
-from chatbot.query_reformulator import (
-    needs_reformulation,
-    reformulate,
-)
+from chatbot.prompt_builder import build_agentic_system_prompt, build_packed_history
 from chatbot.rate_limiter import RateLimiter
-from chatbot.refusal_gate import contains_model_refusal, should_refuse
-from chatbot.retriever import retrieve
+from chatbot.refusal_gate import contains_model_refusal
+from chatbot.research_trace import render_research_trace
 
 logging.basicConfig(
     level=logging.INFO,
@@ -146,140 +139,128 @@ async def on_message(msg_in: cl.Message) -> None:
 async def _handle_message(
     user_msg: str, request_id: str, sid: str, start: float
 ) -> None:
+    """Agentic-RAG message handler (Phase 2).
+
+    Runs the agent loop (Sonnet drives retrieval via tool calls), streams
+    the final answer to a Chainlit message, then renders citations +
+    Sources block + research-trace block.
+
+    Status updates fire to a parent Chainlit Step ('🔬 Researching…')
+    while tool calls execute. The final answer message is created
+    OUTSIDE that Step (per Chainlit best practice — see issue #1372 /
+    #2365: a Message inside a Step renders inside the disclosure).
+    """
     history = session.get_history()
     turn_n = len(history) // 2 + 1
 
+    # Open the parent "Researching…" step BEFORE the answer message —
+    # ordering matters for Chainlit UI (#2365 workaround).
+    research_step: cl.Step | None = None
+    try:
+        research_step = cl.Step(
+            name="🔬 Researching…", type="run", default_open=False
+        )
+        await research_step.send()
+    except Exception as e:
+        logger.warning("could not open research step: %s", e)
+        research_step = None
+
+    # Status callback the agent loop uses to emit per-tool-call status.
+    async def on_status(message: str) -> None:
+        if research_step is None:
+            return
+        try:
+            child = cl.Step(
+                name=message,
+                type="tool",
+                parent_id=research_step.id,
+                default_open=False,
+            )
+            await child.send()
+            child.end = None  # let elapsed auto-set on update
+            await child.update()
+        except Exception as e:
+            logger.warning("on_status emit failed: %s", e)
+
+    # Final-answer Chainlit message — created AFTER the research step,
+    # OUTSIDE its lexical scope (key Chainlit pattern).
     out = cl.Message(content="")
     await out.send()
 
-    # ── Reformulate (skipped if already standalone) ─────────────
-    reformulation_skipped = not needs_reformulation(user_msg, len(history))
-    reformulated = user_msg
-    if not reformulation_skipped:
+    # Stream callback: each agentic text delta goes straight to the bubble.
+    async def on_text_token(text: str) -> None:
         try:
-            reformulated = await reformulate(
-                user_msg, history, settings=settings
-            )
+            await out.stream_token(text)
         except Exception as e:
-            logger.warning("reformulation layer raised: %s", e)
-            reformulated = user_msg
+            logger.warning("stream_token failed: %s", e)
 
-    # ── Retrieve ────────────────────────────────────────────────
-    try:
-        result = await retrieve(reformulated, settings=settings)
-    except FoundryAuthError as e:
-        logger.error("retrieval auth error: %s", e)
-        await _stream_and_update(out, REFUSAL_TEXT_RETRIEVAL)
-        await _log_refusal(
-            start,
-            sid,
-            request_id,
-            turn_n,
-            user_msg,
-            reformulated,
-            reformulation_skipped,
-            reason="foundry_auth_error",
-            answer=REFUSAL_TEXT_RETRIEVAL,
-            error=str(e),
-        )
-        return
-    except (FoundryTransientError, FoundryMalformedResponseError) as e:
-        logger.warning("retrieval error: %s", e)
-        await _stream_and_update(out, REFUSAL_TEXT_RETRIEVAL)
-        await _log_refusal(
-            start,
-            sid,
-            request_id,
-            turn_n,
-            user_msg,
-            reformulated,
-            reformulation_skipped,
-            reason=f"retrieval_error_{type(e).__name__}",
-            answer=REFUSAL_TEXT_RETRIEVAL,
-            error=str(e),
-        )
-        return
-
-    # ── Pre-LLM refusal gate ────────────────────────────────────
-    refuse, reason = should_refuse(result)
-    if refuse:
-        await _stream_and_update(out, REFUSAL_TEXT_NO_MATCH)
-        session.append_turn(
-            user_msg, REFUSAL_TEXT_NO_MATCH, settings.chatbot_max_history_turns
-        )
-        await _log_refusal(
-            start,
-            sid,
-            request_id,
-            turn_n,
-            user_msg,
-            reformulated,
-            reformulation_skipped,
-            reason=reason,
-            answer=REFUSAL_TEXT_NO_MATCH,
-            error=None,
-            result=result,
-        )
-        return
-
-    # ── Build prompt + stream answer ────────────────────────────
-    messages = build_answer_messages(
-        user_query=user_msg,
-        chunks=result.chunks,
-        history=history,
-        tenant_display_name=settings.chatbot_tenant_display_name,
-        max_history_turns=settings.chatbot_max_history_turns,
+    # Build agentic system prompt + packed history block
+    system_prompt = build_agentic_system_prompt(settings.chatbot_tenant_display_name)
+    packed_history = build_packed_history(
+        history, settings.chatbot_max_history_turns
     )
 
-    full_answer_parts: list[str] = []
-    final_finish: str | None = None
-    try:
-        async for chunk in foundry_client.stream_chat(
-            messages=messages,
-            model_id=settings.chatbot_model_id,
-            temperature=settings.chatbot_temperature,
-            max_tokens=settings.chatbot_max_tokens,
-            request_id=request_id,
-            settings=settings,
-        ):
-            if chunk.content:
-                full_answer_parts.append(chunk.content)
-                await out.stream_token(chunk.content)
-            if chunk.finish_reason:
-                final_finish = chunk.finish_reason
-    except FoundryAuthError as e:
-        logger.error("chat auth error mid-stream: %s", e)
-        interrupted = "\n\n*[Stream interrupted.]*"
-        full_answer_parts.append(interrupted)
-        await out.stream_token(interrupted)
-        final_finish = "error"
-    except (FoundryTransientError, FoundryMalformedResponseError) as e:
-        logger.warning("chat error mid-stream: %s", e)
-        interrupted = "\n\n*[Stream interrupted.]*"
-        full_answer_parts.append(interrupted)
-        await out.stream_token(interrupted)
-        final_finish = "error"
+    # Run the agent loop
+    result = await run_agent_turn(
+        user_query=user_msg,
+        system_prompt=system_prompt,
+        packed_history=packed_history,
+        settings=settings,
+        on_status=on_status,
+        on_text_token=on_text_token,
+    )
 
-    raw_answer = "".join(full_answer_parts)
+    # Close the research step
+    if research_step is not None:
+        try:
+            await research_step.update()
+        except Exception:
+            pass
 
-    # ── Append finish-reason footer when relevant ───────────────
-    if final_finish == "length":
-        footer = (
-            "\n\n*[Answer truncated — ask a more focused follow-up for detail.]*"
+    # ── Handle hard-stop conditions ─────────────────────────────
+    if result.finish_reason == "auth_error":
+        out.content = REFUSAL_TEXT_RETRIEVAL
+        out.elements = []
+        await out.update()
+        await _log_agentic(
+            start, sid, request_id, turn_n, user_msg,
+            reformulated_query=user_msg,
+            reformulation_skipped=True,
+            refused=True,
+            refusal_reason="foundry_auth_error",
+            answer=REFUSAL_TEXT_RETRIEVAL,
+            result=result,
+            cited_chunk_ids=[],
+            unmatched_ref_ids=[],
+            post_llm_refused=False,
+            error=result.error,
         )
-        raw_answer += footer
-        await out.stream_token(footer)
-    elif final_finish == "error":
-        # Only append if the stream ended cleanly with error but we didn't
-        # already show an interruption marker above.
-        if not raw_answer.endswith("*[Stream interrupted.]*"):
-            footer = "\n\n*[Stream interrupted upstream.]*"
-            raw_answer += footer
-            await out.stream_token(footer)
+        return
+    if result.finish_reason == "transient":
+        out.content = REFUSAL_TEXT_RETRIEVAL
+        out.elements = []
+        await out.update()
+        await _log_agentic(
+            start, sid, request_id, turn_n, user_msg,
+            reformulated_query=user_msg,
+            reformulation_skipped=True,
+            refused=True,
+            refusal_reason="foundry_transient",
+            answer=REFUSAL_TEXT_RETRIEVAL,
+            result=result,
+            cited_chunk_ids=[],
+            unmatched_ref_ids=[],
+            post_llm_refused=False,
+            error=result.error,
+        )
+        return
 
-    # ── Citation pass (strip fakes + render Sources section) ────
+    raw_answer = result.final_answer
+
+    # ── Citation pass (strip fakes from final text) ─────────────
+    max_n = len(result.chunk_id_to_n)
     cleaned_text, matched_indices, unmatched_indices = strip_unmatched(
-        raw_answer, max_index=len(result.chunks)
+        raw_answer, max_index=max_n
     )
 
     # Post-LLM checks
@@ -292,67 +273,84 @@ async def _handle_message(
         )
         matched_indices = []
 
-    # Stylize inline [N] markers as superscript chips (HTML5).
-    styled_text = stylize_inline_citations(cleaned_text)
+    # Build chunks_by_n for the Sources renderer
+    n_to_chunk = {}
+    for chunk_id, n in result.chunk_id_to_n.items():
+        chunk = result.chunks_seen.get(chunk_id)
+        if chunk is not None:
+            n_to_chunk[n] = chunk
 
-    # Prepend warning banner if fake citations were dropped, then append
-    # the collapsible Sources block enriched with file-level metadata
-    # (filename, ingestion date, authority, match score, etc.).
-    warning = UNMATCHED_WARNING if unmatched_indices else ""
-    sources_md = render_sources_section(
-        result.chunks,
-        matched_indices,
-        file_metadata_by_id=result.file_metadata_by_id,
+    # File-metadata enrichment (concurrent batch over unique source_file_ids)
+    file_metadata_by_id: dict = {}
+    unique_file_ids = list(
+        {c.source_file_id for c in result.chunks_seen.values() if c.source_file_id}
     )
-    final_visible_text = warning + styled_text + sources_md
+    if unique_file_ids and matched_indices:
+        try:
+            md_results = await asyncio.gather(
+                *(
+                    foundry_client.get_file_metadata(
+                        tenant_id=settings.chatbot_tenant_id,
+                        source_file_id=fid,
+                        settings=settings,
+                    )
+                    for fid in unique_file_ids
+                ),
+                return_exceptions=True,
+            )
+            for fid, m in zip(unique_file_ids, md_results, strict=False):
+                if m is not None and not isinstance(m, Exception):
+                    file_metadata_by_id[fid] = m
+        except Exception as e:
+            logger.warning("file metadata enrichment failed: %s", e)
 
-    # Replace bubble content. NO Chainlit elements — pure Markdown to
-    # sidestep the multi-turn display="side" bug cluster (see plan UX
-    # investigation: GH issues #1242, #1827, #2202, #2263).
+    # Stylize inline [N] markers, render Sources + research trace
+    styled_text = stylize_inline_citations(cleaned_text)
+    warning = UNMATCHED_WARNING if unmatched_indices else ""
+    sources_md = render_sources_section_global(
+        n_to_chunk, matched_indices, file_metadata_by_id=file_metadata_by_id
+    )
+    trace_md = render_research_trace(
+        result.tool_calls,
+        iterations=result.iterations,
+        total_latency_ms=result.latency_ms,
+        error=result.error,
+    )
+    final_visible_text = warning + styled_text + sources_md + trace_md
+
     out.content = final_visible_text
     out.elements = []
     await out.update()
 
     # ── Record spend, history, log ──────────────────────────────
-    input_chars = sum(len(m.content) for m in messages)
-    output_chars = len(cleaned_text)
-    cost = estimate_cost_usd(input_chars, output_chars)
-    await rate_limiter.record_spend(cost)
+    await rate_limiter.record_spend(result.estimated_cost_usd)
 
-    # Resolve cited indices → full chunk_ids for the audit log.
     cited_chunk_ids = [
-        result.chunks[i - 1].chunk_id
-        for i in matched_indices
-        if 1 <= i <= len(result.chunks)
+        result.chunks_seen[cid].chunk_id
+        for cid, n in result.chunk_id_to_n.items()
+        if n in matched_indices
     ]
     unmatched_ref_ids = [str(n) for n in unmatched_indices]
 
     session.append_turn(
         user_msg, cleaned_text, settings.chatbot_max_history_turns
     )
-    await _log_success(
-        start,
-        sid,
-        request_id,
-        turn_n,
-        user_msg,
-        reformulated,
-        reformulation_skipped,
-        result,
-        cleaned_text,
-        cited_chunk_ids,
-        unmatched_ref_ids,
-        post_llm_refused,
-        final_finish,
+    await _log_agentic(
+        start, sid, request_id, turn_n, user_msg,
+        reformulated_query=user_msg,  # no reformulator in agentic path
+        reformulation_skipped=True,
+        refused=False,
+        refusal_reason=None,
+        answer=cleaned_text,
+        result=result,
+        cited_chunk_ids=cited_chunk_ids,
+        unmatched_ref_ids=unmatched_ref_ids,
+        post_llm_refused=post_llm_refused,
+        error=None,
     )
 
 
 # ── Helpers ──────────────────────────────────────────────────────
-
-
-async def _stream_and_update(out: cl.Message, text: str) -> None:
-    await out.stream_token(text)
-    await out.update()
 
 
 def _client_ip_hash() -> str:
@@ -414,73 +412,30 @@ async def _log_reject(
     )
 
 
-async def _log_refusal(
+async def _log_agentic(
     start: float,
     sid: str,
     request_id: str,
     turn_n: int,
     user_msg: str,
-    reformulated: str,
+    *,
+    reformulated_query: str,
     reformulation_skipped: bool,
-    reason: str,
+    refused: bool,
+    refusal_reason: str | None,
     answer: str,
-    error: str | None,
-    result=None,  # RetrievalResult | None
-) -> None:
-    raw = sorted((c.relevance_score or 0.0 for c in result.chunks), reverse=True) if result else []
-    norm = (
-        sorted(
-            (_normalized_for_log(c.relevance_score or 0.0) for c in result.chunks),
-            reverse=True,
-        )
-        if result
-        else []
-    )
-    await conv_log.append(
-        LogEntry(
-            ts=utcnow_iso(),
-            session_id=sid,
-            turn_n=turn_n,
-            request_id=request_id,
-            user_msg=user_msg[:500],
-            reformulated_query=reformulated[:500],
-            reformulation_skipped=reformulation_skipped,
-            refused=True,
-            refusal_reason=reason,
-            top_chunk_scores_raw=raw,
-            top_chunk_scores_normalized=norm,
-            cited_chunk_ids=[],
-            unmatched_ref_ids=[],
-            post_llm_refusal=False,
-            answer=answer[:2000],
-            latency_ms_total=int((time.perf_counter() - start) * 1000),
-            latency_ms_retrieval=result.latency_ms if result else 0,
-            error=error,
-            finish_reason=None,
-        )
-    )
-
-
-async def _log_success(
-    start: float,
-    sid: str,
-    request_id: str,
-    turn_n: int,
-    user_msg: str,
-    reformulated: str,
-    reformulation_skipped: bool,
-    result,
-    answer: str,
+    result: AgentTurnResult,
     cited_chunk_ids: list[str],
     unmatched_ref_ids: list[str],
     post_llm_refused: bool,
-    finish_reason: str | None,
+    error: str | None,
 ) -> None:
-    raw = sorted((c.relevance_score or 0.0 for c in result.chunks), reverse=True)
-    norm = sorted(
-        (_normalized_for_log(c.relevance_score or 0.0) for c in result.chunks),
-        reverse=True,
-    )
+    """Persist a JSONL log entry for one agentic turn.
+
+    Populates both legacy LogEntry fields (kept for log-format
+    continuity) and the agentic fields added in Phase 2.
+    """
+    tool_calls_serialized = [asdict(t) for t in result.tool_calls]
     await conv_log.append(
         LogEntry(
             ts=utcnow_iso(),
@@ -488,28 +443,29 @@ async def _log_success(
             turn_n=turn_n,
             request_id=request_id,
             user_msg=user_msg[:500],
-            reformulated_query=reformulated[:500],
+            reformulated_query=reformulated_query[:500],
             reformulation_skipped=reformulation_skipped,
-            refused=False,
-            refusal_reason=None,
-            top_chunk_scores_raw=raw,
-            top_chunk_scores_normalized=norm,
+            refused=refused,
+            refusal_reason=refusal_reason,
+            top_chunk_scores_raw=[],  # n/a in agentic path
+            top_chunk_scores_normalized=[],
             cited_chunk_ids=cited_chunk_ids,
             unmatched_ref_ids=unmatched_ref_ids,
             post_llm_refusal=post_llm_refused,
             answer=answer[:4000],
             latency_ms_total=int((time.perf_counter() - start) * 1000),
-            latency_ms_retrieval=result.latency_ms,
-            error=None,
-            finish_reason=finish_reason,
+            latency_ms_retrieval=0,  # multi-call; per-tool latency lives in agent_tool_calls
+            error=error,
+            finish_reason=result.finish_reason,
+            agent_iterations=result.iterations,
+            agent_tool_calls=tool_calls_serialized,
+            agent_chunks_seen_count=len(result.chunks_seen),
+            agent_input_tokens=result.input_tokens,
+            agent_output_tokens=result.output_tokens,
+            agent_estimated_cost_usd=round(result.estimated_cost_usd, 6),
+            agent_finish_reason=result.finish_reason,
         )
     )
-
-
-def _normalized_for_log(raw: float) -> float:
-    from chatbot.retriever import normalize_rrf_score
-
-    return round(normalize_rrf_score(raw), 4)
 
 
 # ── Register /healthz on Chainlit's FastAPI app at import time ──
