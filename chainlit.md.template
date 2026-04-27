@@ -1,11 +1,94 @@
-# Welcome
+# About this assistant
 
-I'm a knowledge-base assistant for **{{TENANT_DISPLAY_NAME}}**.
+I'm **{{TENANT_DISPLAY_NAME}}**'s research assistant — a closed-loop, knowledge-grounded chatbot built specifically for this project. This page explains what I am, what I know, how to use me, and where my limits are.
 
-**I answer only from the documents in {{TENANT_DISPLAY_NAME}}'s knowledge library.** Every claim I make is cited — click the `ref:...` badges to open the source text in the side panel.
+---
 
-If I can't find grounded information to answer your question, I'll say so directly instead of guessing.
+## How I'm different from a normal AI
 
-_Conversations are logged for demo review and deleted after 30 days._
+Most chatbots (ChatGPT, Gemini, Claude.ai, etc.) draw on **general training data** plus, in many cases, **live web search**. That makes them flexible but unreliable for serious research: training data goes stale, web sources are uneven quality, and any given answer mixes a dozen unverifiable sources.
 
-Type a question below to get started.
+I work the opposite way:
+
+- I do **not** use general training-data knowledge for factual claims.
+- I do **not** search the open web.
+- I do **not** guess. If the corpus doesn't have it, I say so.
+- I answer **only** from a curated, purpose-built knowledge base assembled and reviewed for {{TENANT_DISPLAY_NAME}}.
+- Every factual claim I make traces back to a specific passage in a specific document. You can click the **[1]**, **[2]** in my answers to verify.
+
+I'm slower than a typical chatbot. The tradeoff is that my answers are **auditable**, free of open-web noise, and current to the curated sources rather than to whatever my model happened to be trained on.
+
+---
+
+## What's in my knowledge base
+
+**57 documents · ~10,500 indexed passages**, drawing on research curated and approved by **Patience Knight and the team at Alabama A&M University**.
+
+The library covers, among other topics:
+
+- Canebrake and rivercane restoration
+- Prescribed fire and fuels management
+- Wildlife habitat (especially quail, songbirds, and pollinators)
+- Soil and ecological-site descriptions (NRCS ESDs)
+- Southeastern grasslands and savanna systems
+- Forest stewardship and silvopasture
+- Riparian and stream-bank conservation
+- Property-level management plans for {{TENANT_DISPLAY_NAME}} sites
+
+Source types include peer-reviewed papers, USDA / NRCS publications, gray literature, regional management guides, and {{TENANT_DISPLAY_NAME}}'s own field documents.
+
+---
+
+## How to use me
+
+1. **Type a question** in the box below — natural language, full sentences are fine.
+2. **Watch the 🔬 Research disclosure** as I work. I'll search the corpus, drill into specific documents when needed, and pull surrounding context. You can expand it to see exactly what I read.
+3. **Read my answer.** Each factual claim has a **[N]** marker.
+4. **Click any [N]** or expand the **Sources** block at the bottom to see the original passage, source filename, and (when available) page number.
+5. **Ask follow-ups.** I remember the last several turns of our conversation, so "tell me more about that" or "what about prescribed fire?" works naturally.
+
+---
+
+## Frequently asked questions
+
+### What if you can't find something?
+
+I'll tell you. I won't fabricate an answer. If a topic is partially covered, I'll say what the corpus *does* show and acknowledge the gap. Try rephrasing — sometimes a different angle surfaces sources the first query missed.
+
+### How current is your knowledge?
+
+As current as the documents in the curated library. New research won't show up until it's added to the corpus by the curation team. If you need current-event information (today's weather, this morning's news, recent legislation), I'm the wrong tool — use a general assistant for those.
+
+### Can I trust your citations?
+
+Yes — every **[N]** maps to a specific chunk of text from a specific source file in the library. If you click through and the passage doesn't support the claim, that's a bug; please flag it.
+
+### Who curated the knowledge base?
+
+The corpus was assembled and reviewed by **Patience Knight and her team at Alabama A&M University**, with input from {{TENANT_DISPLAY_NAME}}'s own documentation.
+
+### How does this support {{TENANT_DISPLAY_NAME}}'s work?
+
+{{TENANT_DISPLAY_NAME}}'s land-management and restoration work depends on rigorous, traceable science — not on whatever the latest LLM happened to read on the web. This assistant turns the curated research library into a conversational interface, so anyone on the team (or a partner, or a funder) can pull grounded answers without hunting through 50 PDFs.
+
+### Is this conversation private?
+
+Conversations are logged for demo review and deleted after 30 days. Don't paste anything sensitive (passwords, personal data, proprietary information). For a production deployment, retention and access controls would be tightened.
+
+### Why does it sometimes take 10+ seconds?
+
+Because I'm doing real research — searching, reading, sometimes drilling into a document for fuller context — instead of responding from cached embeddings of general knowledge. The 🔬 Research disclosure shows you exactly what I'm doing during that time.
+
+---
+
+## My limits
+
+- **Not real-time.** I don't know about anything added to the library after the last ingest.
+- **Corpus-bound.** If a topic isn't covered, I can't help — even if I "know" about it from general training data, I won't use that knowledge for factual claims.
+- **English-only**, given the source library.
+- **No image generation, file editing, or external tool use** beyond the knowledge-base lookup.
+- **Best for substantive research questions**, not casual chitchat.
+
+---
+
+_Built for {{TENANT_DISPLAY_NAME}} as a demonstration of closed-loop, knowledge-grounded conversational AI._
