@@ -1,0 +1,6 @@
+# Force LF line endings in the repo for all text files; let git auto-detect text vs binary.
+# Keeps Windows working trees as CRLF (when client has core.autocrlf=true) while making
+# the repo+index consistently LF — independent of any consumer's git config. Prevents
+# environment-dependent phantom diffs (e.g., Cowork/WSL viewing CRLF working tree against
+# LF HEAD as many "modified" files).
+* text=auto eol=lf
